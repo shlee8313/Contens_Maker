@@ -4,7 +4,7 @@ import TopicSelector from './components/TopicSelector';
 import TopicList from './components/TopicList';
 import StyleSelector from './components/StyleSelector';
 import Dashboard from './components/Dashboard';
-import { fetchTrendingTopics, generatePerfectScript, generateScriptFromRawText, applyDirectorMode, rewriteScript } from './services/geminiService';
+import { fetchTrendingTopics, generatePerfectScript, generateScriptFromRawText, applyDirectorMode, rewriteScript, generateThumbnail } from './services/geminiService';
 import { saveToIndexedDB } from './services/pipeline';
 import { Loader2, AlertTriangle, X } from 'lucide-react';
 import QuotaMonitor from './components/QuotaMonitor'; 
@@ -21,6 +21,25 @@ const App: React.FC = () => {
   
   // API Error State
   const [apiError, setApiError] = useState<string | null>(null);
+
+  // Helper to run thumbnail generation in background without blocking UI
+  const triggerThumbnailGeneration = (data: ScriptData) => {
+    if (data.meta.thumbnail_prompt && !data.meta.thumbnail_url) {
+        generateThumbnail(data.meta.thumbnail_prompt).then(async (url) => {
+            if (url) {
+                setScriptData(prev => {
+                    if (!prev) return null;
+                    const newData = { 
+                        ...prev, 
+                        meta: { ...prev.meta, thumbnail_url: url } 
+                    };
+                    saveToIndexedDB(newData);
+                    return newData;
+                });
+            }
+        }).catch(err => console.error("Auto-thumbnail failed", err));
+    }
+  };
 
   // Handlers
   const handleSelectCategory = async (category: string) => {
@@ -56,6 +75,9 @@ const App: React.FC = () => {
       const savedData = await saveToIndexedDB(data);
       setScriptData(savedData);
       
+      // [NEW] Trigger Thumbnail Generation in Background
+      triggerThumbnailGeneration(savedData);
+
       setView(ViewState.STYLE_SELECT);
 
     } catch (error: any) {
@@ -86,6 +108,10 @@ const App: React.FC = () => {
 
         const savedData = await saveToIndexedDB(data);
         setScriptData(savedData);
+        
+        // [NEW] Trigger Thumbnail Generation in Background
+        triggerThumbnailGeneration(savedData);
+        
         setView(ViewState.STYLE_SELECT);
 
       } catch (error: any) {

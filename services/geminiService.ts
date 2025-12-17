@@ -103,12 +103,11 @@ function checkForApiError(error: any): string | undefined {
     const msg = error.toString().toLowerCase();
     
     // 1. Daily Quota Exceeded (Explicit)
-    // Checks for "quota" AND ("exceeded" or "limit") to be sure.
     if ((msg.includes("quota") && (msg.includes("exceeded") || msg.includes("limit"))) || msg.includes("429 resource exhausted")) {
          return "⚠️ 일일 API 할당량을 초과했습니다 (Daily Quota). 내일 다시 이용해주세요.";
     }
 
-    // 2. Rate Limit (RPM) - 429 without explicit "Quota" word usually means speed limit
+    // 2. Rate Limit (RPM)
     if (msg.includes("429") || msg.includes("resource_exhausted")) {
          return "요청 속도가 너무 빠릅니다 (RPM 제한). 10초 정도 쉬었다가 천천히 시도해주세요.";
     }
@@ -363,6 +362,32 @@ export const generateImage = async (prompt: string, layout: LayoutType = 'SINGLE
     const apiError = checkForApiError(error);
     if (apiError) throw new Error(apiError);
     throw error;
+  }
+};
+
+// [NEW] Specialized Thumbnail Generator
+export const generateThumbnail = async (prompt: string): Promise<string> => {
+  const model = 'gemini-2.5-flash-image';
+  try {
+    quotaManager.increment(model);
+    // Enhance prompt for thumbnail
+    const enhancedPrompt = `YouTube thumbnail, high quality, 16:9 aspect ratio, eye-catching, vibrant colors, dynamic composition, dramatic lighting, detailed background. Context: ${prompt}`;
+    
+    const response = await ai.models.generateContent({
+      model: model, 
+      contents: { parts: [{ text: enhancedPrompt }] }, 
+      config: { safetySettings: SAFETY_SETTINGS }
+    });
+    
+    quotaManager.updateModelStatus('Idle');
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data 
+        ? `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}` 
+        : "";
+  } catch (error: any) { 
+    quotaManager.updateModelStatus('Error');
+    // Log but don't throw to avoid breaking the flow if it's just thumbnail
+    console.error("Thumbnail generation failed", error);
+    return "";
   }
 };
 

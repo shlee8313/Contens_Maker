@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { ScriptData, Scene } from '../types';
 import SceneCard from './SceneCard';
-import { generateVisualPlan, generateImage, generateSpeech } from '../services/geminiService';
+import { generateVisualPlan, generateImage, generateSpeech, generateThumbnail } from '../services/geminiService';
 import { saveToIndexedDB } from '../services/pipeline';
-import { ArrowLeft, Download, Music, Palette, User, Save, Clapperboard, PenTool, Mic, Image as ImageIcon, Play, AlertTriangle, Copy, X } from 'lucide-react';
+import { ArrowLeft, Download, Music, Palette, User, Save, Clapperboard, PenTool, Mic, Image as ImageIcon, Play, AlertTriangle, Copy, X, RefreshCw } from 'lucide-react';
 // @ts-ignore
 import JSZip from 'jszip';
 
@@ -41,6 +41,10 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
     }))
   );
 
+  // Local state for thumbnail to allow regeneration
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | undefined>(data.meta.thumbnail_url);
+  const [isRegeneratingThumb, setIsRegeneratingThumb] = useState(false);
+
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<string>('');
   
@@ -50,11 +54,16 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
   // --- Auto-Save Effect ---
   useEffect(() => {
     const timer = setTimeout(() => {
-        const currentData: ScriptData = { ...data, scenes };
+        // Include thumbnail update in the save
+        const currentData: ScriptData = { 
+            ...data, 
+            meta: { ...data.meta, thumbnail_url: thumbnailUrl },
+            scenes 
+        };
         saveToIndexedDB(currentData);
     }, 500); 
     return () => clearTimeout(timer);
-  }, [scenes, data]);
+  }, [scenes, data, thumbnailUrl]);
 
 
   // --- Handlers ---
@@ -63,6 +72,24 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
     setScenes(prev => prev.map(s => 
       s.scene_index === index ? { ...s, isSelected: !s.isSelected } : s
     ));
+  };
+
+  const handleRegenerateThumbnail = async () => {
+    if (!data.meta.thumbnail_prompt || isRegeneratingThumb) return;
+    setIsRegeneratingThumb(true);
+    try {
+        const url = await generateThumbnail(data.meta.thumbnail_prompt);
+        if (url) {
+            setThumbnailUrl(url);
+        } else {
+            alert("썸네일 생성에 실패했습니다.");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("썸네일 생성 중 오류가 발생했습니다.");
+    } finally {
+        setIsRegeneratingThumb(false);
+    }
   };
 
   const runDirectorAgent = async () => {
@@ -185,7 +212,7 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
   };
 
   const handleGenerateVideo = (index: number) => {
-    alert("비디오 변환 기능: 현재 Veo 모델 연동 준비중입니다. (시뮬레이션)");
+    alert("⚠️ 비디오 생성(Veo)은 Google Cloud 유료 결제 계정이 필요합니다.\n현재 무료 버전에서는 시뮬레이션(Placeholder)으로 대체됩니다.");
   };
 
   const copyThumbnailPrompt = () => {
@@ -198,6 +225,12 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
     setDownloadStatus('압축 중...');
     const zip = new JSZip();
     const assetsFolder = zip.folder("assets");
+
+    // [NEW] Add Thumbnail to Zip
+    if (thumbnailUrl && thumbnailUrl.startsWith('data:image')) {
+        const thumbData = thumbnailUrl.split(',')[1];
+        zip.file("thumbnail.png", thumbData, {base64: true});
+    }
 
     const manifestScenes = scenes.map(s => {
       if (s.assets.visual_url && s.assets.visual_url.startsWith('data:image')) {
@@ -222,6 +255,10 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
 
     const manifest = {
       ...data,
+      meta: {
+          ...data.meta,
+          thumbnail_url: thumbnailUrl ? 'thumbnail.png' : undefined 
+      },
       scenes: manifestScenes
     };
 
@@ -301,23 +338,51 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
             <span className="px-3 py-1 bg-slate-700 text-slate-300 rounded-full">총 {scenes.length}개 씬</span>
          </div>
          
-         {/* Thumbnail Prompt Section */}
+         {/* Thumbnail Prompt Section [IMPROVED] */}
          {data.meta.thumbnail_prompt && (
-             <div className="bg-black/30 p-3 rounded-lg border border-slate-700/50 flex items-start gap-3">
-                 <div className="p-2 bg-slate-800 rounded">
-                     <ImageIcon className="w-4 h-4 text-purple-400" />
+             <div className="bg-black/30 p-4 rounded-xl border border-slate-700/50 flex flex-col md:flex-row gap-4">
+                 {/* Left: Image Preview */}
+                 <div className="w-full md:w-64 aspect-video bg-slate-800 rounded-lg overflow-hidden border border-slate-600 relative group">
+                    {thumbnailUrl ? (
+                        <img src={thumbnailUrl} alt="Generated Thumbnail" className="w-full h-full object-cover" />
+                    ) : (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
+                             {isRegeneratingThumb ? <RefreshCw className="w-8 h-8 animate-spin text-blue-400"/> : <ImageIcon className="w-8 h-8 opacity-20" />}
+                             <span className="text-xs">{isRegeneratingThumb ? "생성 중..." : "이미지 없음"}</span>
+                        </div>
+                    )}
                  </div>
-                 <div className="flex-1">
-                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">썸네일 생성 프롬프트</h4>
-                     <p className="text-xs text-slate-300 font-mono line-clamp-2">{data.meta.thumbnail_prompt}</p>
+
+                 {/* Right: Info & Actions */}
+                 <div className="flex-1 flex flex-col justify-between py-1">
+                     <div>
+                        <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-xs font-bold text-slate-400 uppercase flex items-center gap-2">
+                                <ImageIcon className="w-4 h-4" /> 썸네일 (YouTube Thumbnail)
+                            </h4>
+                            <button 
+                                onClick={handleRegenerateThumbnail}
+                                disabled={isRegeneratingThumb}
+                                className="text-xs flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors disabled:opacity-50"
+                            >
+                                <RefreshCw className={`w-3 h-3 ${isRegeneratingThumb ? 'animate-spin' : ''}`} />
+                                {thumbnailUrl ? '다시 만들기' : '이미지 생성'}
+                            </button>
+                        </div>
+                        <p className="text-xs text-slate-300 font-mono bg-slate-900/50 p-3 rounded border border-slate-800 line-clamp-3">
+                            {data.meta.thumbnail_prompt}
+                        </p>
+                     </div>
+                     
+                     <div className="flex justify-end mt-2">
+                        <button 
+                            onClick={copyThumbnailPrompt}
+                            className="text-slate-500 hover:text-white text-xs flex items-center gap-1 transition-colors"
+                        >
+                            <Copy className="w-3 h-3" /> 프롬프트 복사
+                        </button>
+                     </div>
                  </div>
-                 <button 
-                    onClick={copyThumbnailPrompt}
-                    className="p-2 hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"
-                    title="복사하기"
-                 >
-                     <Copy className="w-4 h-4" />
-                 </button>
              </div>
          )}
       </div>

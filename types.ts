@@ -86,6 +86,7 @@ export interface ScriptMeta {
   thumbnail_prompt: string;
   bgm_mood: string;
   timestamp?: number;
+  thumbnail_url?: string; // [NEW] Stores the generated thumbnail base64
 }
 
 export interface GlobalStyle {

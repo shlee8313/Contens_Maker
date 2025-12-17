@@ -115,6 +115,12 @@ const Dashboard: React.FC<DashboardProps> = ({ initialData, onBack }) => {
     const zip = new JSZip();
     const assetsFolder = zip.folder("assets");
 
+    // [NEW] Add Thumbnail to Zip
+    if (project.meta.thumbnail_url && project.meta.thumbnail_url.startsWith('data:image')) {
+        const thumbData = project.meta.thumbnail_url.split(',')[1];
+        zip.file("thumbnail.png", thumbData, {base64: true});
+    }
+
     const manifestScenes = project.scenes.map(s => {
       if (s.assets.visual_url && s.assets.visual_url.startsWith('data:image')) {
         const imgData = s.assets.visual_url.split(',')[1];
@@ -136,6 +142,10 @@ const Dashboard: React.FC<DashboardProps> = ({ initialData, onBack }) => {
 
     const manifest = {
       ...project,
+      meta: {
+          ...project.meta,
+          thumbnail_url: project.meta.thumbnail_url ? 'thumbnail.png' : undefined // Replace base64 with relative path
+      },
       scenes: manifestScenes
     };
 
@@ -199,6 +209,18 @@ const Dashboard: React.FC<DashboardProps> = ({ initialData, onBack }) => {
           <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full text-slate-400">
             <ArrowLeft className="w-5 h-5" />
           </button>
+          
+          {/* [NEW] Thumbnail Preview in Header */}
+          {project.meta.thumbnail_url ? (
+              <div className="w-16 h-9 rounded bg-black overflow-hidden border border-slate-600">
+                  <img src={project.meta.thumbnail_url} alt="Thumbnail" className="w-full h-full object-cover" />
+              </div>
+          ) : (
+              <div className="w-16 h-9 rounded bg-slate-800 border border-slate-700 flex items-center justify-center">
+                  <ImageIcon className="w-4 h-4 text-slate-600" />
+              </div>
+          )}
+
           <div>
             <h1 className="font-bold text-lg text-white truncate max-w-[200px] md:max-w-md">
               {project.meta.title}

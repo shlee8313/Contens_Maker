@@ -58,12 +58,25 @@ const QuotaMonitor: React.FC = () => {
           <Zap className={`w-3 h-3 ${textColor}`} />
           <span className="hidden sm:inline">Local Count:</span>
           <span className={`font-bold ${textColor}`}>{stats.count}</span>
-          <span className="text-slate-600">/ {limit} (Est.)</span>
+          <span className="text-slate-600">/ {limit} (Daily)</span>
           
           {/* Tooltip */}
-          <div className="absolute top-full right-0 mt-2 w-64 p-2 bg-slate-800 border border-slate-700 rounded shadow-xl text-[10px] text-slate-300 hidden group-hover:block z-50 leading-relaxed">
-            API는 남은 할당량을 알려주지 않습니다.<br/>
-            이 수치는 앱 내에서 발생한 요청 횟수를 단순 집계한 <strong>추정치</strong>입니다.
+          <div className="absolute top-full right-0 mt-2 w-72 p-3 bg-slate-800 border border-slate-700 rounded-lg shadow-xl text-[11px] text-slate-300 hidden group-hover:block z-50 leading-relaxed tracking-tight">
+            <p className="mb-2 text-white font-bold border-b border-slate-600 pb-1">
+                Gemini 2.5 Flash 무료 티어 기준
+            </p>
+            <ul className="list-disc pl-3 space-y-1 text-slate-400">
+                <li>
+                    <strong>하루 1,500회</strong> 통합 요청 가능
+                </li>
+                <li>
+                    <span className="text-emerald-400">이미지</span>, 오디오, 텍스트가 이 한도를 공유합니다.
+                    <br/>(이미지 100장은 충분히 가능합니다)
+                </li>
+                <li>
+                    <span className="text-red-400">비디오(Veo)</span>는 무료 티어에서 지원되지 않습니다. (유료 결제 필요)
+                </li>
+            </ul>
           </div>
         </div>
 
