@@ -30,6 +30,7 @@ const QuotaMonitor: React.FC = () => {
   const isIdle = stats.activeModel === 'Idle';
   const modelColorClass = stats.activeModel.includes('image') ? 'bg-purple-500/20 text-purple-300 border-purple-500/30' : 
                           stats.activeModel.includes('tts') ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
+                          stats.activeModel.includes('veo') ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' :
                           isIdle ? 'bg-slate-700/50 text-slate-500 border-slate-600' :
                           'bg-blue-500/20 text-blue-300 border-blue-500/30';
 

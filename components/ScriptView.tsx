@@ -3,7 +3,7 @@ import { ScriptData, Scene } from '../types';
 import SceneCard from './SceneCard';
 import { generateVisualPlan, generateImage, generateSpeech, generateThumbnail } from '../services/geminiService';
 import { saveToIndexedDB } from '../services/pipeline';
-import { ArrowLeft, Download, Music, Palette, User, Save, Clapperboard, PenTool, Mic, Image as ImageIcon, Play, AlertTriangle, Copy, X, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Download, Music, Palette, User, Save, Clapperboard, PenTool, Mic, Image as ImageIcon, Play, AlertTriangle, Copy, X, RefreshCw, LayoutTemplate } from 'lucide-react';
 // @ts-ignore
 import JSZip from 'jszip';
 
@@ -249,7 +249,10 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
         ...s,
         isSelected: undefined,
         isProcessing: undefined,
-        assets: cleanAssets
+        assets: cleanAssets,
+        // Include Cuts Info for video editor
+        cuts: s.cuts,
+        narration_full: s.narration_full
       };
     });
 
@@ -389,6 +392,7 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
 
       {/* AGENT DASHBOARD */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        {/* Steps... (same as before) */}
         {/* Step 1 */}
         <div className="bg-slate-800/50 p-4 rounded-xl border border-emerald-500/30 opacity-70">
           <div className="flex items-center gap-2 text-emerald-400 mb-2">
@@ -459,8 +463,9 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
       <div className="space-y-6">
         {scenes.map((scene) => (
           <div key={scene.scene_index} className="relative group">
-            {/* Visual Preview (Big) */}
-            {scene.assets.visual_url && (
+            
+            {/* ... Visual Preview (Same as before) ... */}
+             {scene.assets.visual_url && (
                 <div className="mb-2 rounded-xl overflow-hidden border border-slate-700 bg-black relative max-h-[400px]">
                     <img src={scene.assets.visual_url} alt="Generated" className="w-full h-full object-contain mx-auto" />
                     <div className="absolute top-2 right-2 bg-black/60 px-2 py-1 rounded text-xs text-white font-mono">
@@ -485,8 +490,36 @@ const ScriptView: React.FC<ScriptViewProps> = ({ data, onBack }) => {
               onGenerateVideo={handleGenerateVideo}
             />
 
-            {/* Asset Status Bar */}
-            <div className="mt-[-10px] mx-4 p-3 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-between text-xs">
+            {/* CUTS DISPLAY IN SCRIPTVIEW (NEW) */}
+             {scene.cuts && scene.cuts.length > 0 && (
+                 <div className="mx-4 mt-[-1px] bg-slate-900 border-x border-slate-800 p-4 relative z-0">
+                     <div className="flex items-center gap-2 mb-3">
+                         <LayoutTemplate className="w-4 h-4 text-purple-400" />
+                         <span className="text-xs font-bold text-slate-400 uppercase">분할된 컷 (4개)</span>
+                         <div className="h-px bg-slate-800 flex-1"></div>
+                     </div>
+                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                         {scene.cuts.map(cut => (
+                             <div key={cut.cut_no} className="bg-slate-950 p-3 rounded border border-slate-800/50 flex flex-col gap-2">
+                                 <div className="flex justify-between items-start">
+                                     <span className="bg-purple-900/30 text-purple-400 text-[10px] px-1.5 py-0.5 rounded border border-purple-800">
+                                         Cut #{cut.cut_no}
+                                     </span>
+                                     <span className="text-[10px] text-slate-500 italic max-w-[70%] truncate">
+                                         {cut.visual_detail}
+                                     </span>
+                                 </div>
+                                 <p className="text-xs text-slate-300">
+                                     {cut.narration}
+                                 </p>
+                             </div>
+                         ))}
+                     </div>
+                 </div>
+             )}
+
+            {/* Asset Status Bar (Bottom) */}
+            <div className={`mx-4 p-3 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-between text-xs ${scene.cuts?.length ? 'mt-0' : 'mt-[-10px]'}`}>
                  <div className="flex items-center gap-4">
                      {scene.assets.visual_url ? (
                         <div className="flex items-center gap-2 text-emerald-400">
