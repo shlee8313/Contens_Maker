@@ -3,6 +3,12 @@ export interface QuotaStats {
   count: number;
   lastUpdated: number;
   activeModel: string;
+  modelCounts: {
+    text: number;
+    image: number;
+    audio: number;
+    video: number;
+  };
 }
 
 const STORAGE_KEY_PREFIX = 'gemini_quota_';
@@ -16,6 +22,7 @@ export const quotaManager = {
         const stored = localStorage.getItem(key);
         
         const defaultModel = 'Idle';
+        const defaultCounts = { text: 0, image: 0, audio: 0, video: 0 };
 
         if (stored) {
             try {
@@ -25,19 +32,18 @@ export const quotaManager = {
                      return { 
                         count: typeof parsed.count === 'number' ? parsed.count : 0, 
                         lastUpdated: parsed.lastUpdated || Date.now(), 
-                        activeModel: parsed.activeModel || defaultModel 
+                        activeModel: parsed.activeModel || defaultModel,
+                        modelCounts: parsed.modelCounts || defaultCounts
                      };
                 }
             } catch (e) {
-                // Ignore parse error, return default
                 console.warn('Failed to parse quota stats, resetting.', e);
             }
         }
-        return { count: 0, lastUpdated: Date.now(), activeModel: defaultModel };
+        return { count: 0, lastUpdated: Date.now(), activeModel: defaultModel, modelCounts: defaultCounts };
     } catch (e) {
-        // In case localStorage is disabled or fails
         console.warn('LocalStorage access failed.', e);
-        return { count: 0, lastUpdated: Date.now(), activeModel: 'Idle' };
+        return { count: 0, lastUpdated: Date.now(), activeModel: 'Idle', modelCounts: { text: 0, image: 0, audio: 0, video: 0 } };
     }
   },
 
@@ -48,10 +54,19 @@ export const quotaManager = {
         
         let currentStats = quotaManager.getStats();
         
-        const newStats = {
+        // Determine type based on model name
+        const type = modelName.includes('image') ? 'image' :
+                     modelName.includes('tts') ? 'audio' :
+                     modelName.includes('veo') ? 'video' : 'text';
+
+        const newStats: QuotaStats = {
           count: currentStats.count + 1,
           lastUpdated: Date.now(),
-          activeModel: modelName
+          activeModel: modelName,
+          modelCounts: {
+              ...currentStats.modelCounts,
+              [type]: (currentStats.modelCounts[type] || 0) + 1
+          }
         };
 
         localStorage.setItem(key, JSON.stringify(newStats));

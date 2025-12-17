@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { quotaManager, QuotaStats } from '../utils/quotaManager';
-import { Activity, Server, Zap, ExternalLink, HelpCircle } from 'lucide-react';
+import { Activity, Server, Zap, ExternalLink, FileText, Image as ImageIcon, Mic, Film } from 'lucide-react';
 
 const QuotaMonitor: React.FC = () => {
   const [stats, setStats] = useState<QuotaStats>(quotaManager.getStats());
@@ -35,47 +35,69 @@ const QuotaMonitor: React.FC = () => {
                           'bg-blue-500/20 text-blue-300 border-blue-500/30';
 
   return (
-    <div className="w-full bg-slate-950 border-b border-slate-800 py-1.5 px-4 flex items-center justify-between text-xs font-mono select-none sticky top-0 z-[100]">
+    <div className="w-full bg-slate-950 border-b border-slate-800 py-1.5 px-4 flex flex-col sm:flex-row items-center justify-between text-xs font-mono select-none sticky top-0 z-[100] gap-2 sm:gap-0">
       
       {/* Left: Active Model Indicator */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
         <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${modelColorClass} transition-colors duration-300`}>
           <Server className="w-3 h-3" />
-          <span className="font-bold">{stats.activeModel}</span>
+          <span className="font-bold truncate max-w-[150px]">{stats.activeModel}</span>
         </div>
         {!isIdle && (
-            <div className="hidden sm:flex items-center gap-1 text-slate-400 animate-pulse">
+            <div className="flex items-center gap-1 text-slate-400 animate-pulse">
                 <Activity className="w-3 h-3" />
-                <span>Processing...</span>
+                <span className="hidden sm:inline">Processing...</span>
             </div>
         )}
       </div>
 
+      {/* Middle: Breakdown Stats (Hidden on very small screens, visible on hover or larger screens) */}
+      <div className="hidden md:flex items-center gap-3 text-slate-500">
+          <div className="flex items-center gap-1" title="Text Generation Calls">
+              <FileText className="w-3 h-3 text-blue-400" /> {stats.modelCounts?.text || 0}
+          </div>
+          <div className="w-px h-3 bg-slate-800"></div>
+          <div className="flex items-center gap-1" title="Image Generation Calls">
+              <ImageIcon className="w-3 h-3 text-purple-400" /> {stats.modelCounts?.image || 0}
+          </div>
+          <div className="w-px h-3 bg-slate-800"></div>
+          <div className="flex items-center gap-1" title="Audio Generation Calls">
+              <Mic className="w-3 h-3 text-amber-400" /> {stats.modelCounts?.audio || 0}
+          </div>
+          <div className="w-px h-3 bg-slate-800"></div>
+          <div className="flex items-center gap-1" title="Video Generation Calls">
+              <Film className="w-3 h-3 text-indigo-400" /> {stats.modelCounts?.video || 0}
+          </div>
+      </div>
+
       {/* Right: Usage Counter & Link */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
         
         {/* Usage Stats (Local Estimate) */}
         <div className="flex items-center gap-1.5 text-slate-400 group relative cursor-help">
           <Zap className={`w-3 h-3 ${textColor}`} />
-          <span className="hidden sm:inline">Local Count:</span>
+          <span className="hidden sm:inline">Total:</span>
           <span className={`font-bold ${textColor}`}>{stats.count}</span>
-          <span className="text-slate-600">/ {limit} (Daily)</span>
+          <span className="text-slate-600">/ {limit}</span>
           
           {/* Tooltip */}
           <div className="absolute top-full right-0 mt-2 w-72 p-3 bg-slate-800 border border-slate-700 rounded-lg shadow-xl text-[11px] text-slate-300 hidden group-hover:block z-50 leading-relaxed tracking-tight">
-            <p className="mb-2 text-white font-bold border-b border-slate-600 pb-1">
-                Gemini 2.5 Flash 무료 티어 기준
+            <p className="mb-2 text-white font-bold border-b border-slate-600 pb-1 flex justify-between">
+                <span>API Usage Breakdown</span>
+                <span className="text-slate-500 font-normal">Est. Free Tier</span>
             </p>
-            <ul className="list-disc pl-3 space-y-1 text-slate-400">
+            <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="flex justify-between"><span className="text-blue-300">Text:</span> {stats.modelCounts?.text || 0}</div>
+                <div className="flex justify-between"><span className="text-purple-300">Image:</span> {stats.modelCounts?.image || 0}</div>
+                <div className="flex justify-between"><span className="text-amber-300">Audio:</span> {stats.modelCounts?.audio || 0}</div>
+                <div className="flex justify-between"><span className="text-indigo-300">Video:</span> {stats.modelCounts?.video || 0}</div>
+            </div>
+            <ul className="list-disc pl-3 space-y-1 text-slate-400 pt-2 border-t border-slate-700">
                 <li>
                     <strong>하루 1,500회</strong> 통합 요청 가능
                 </li>
                 <li>
-                    <span className="text-emerald-400">이미지</span>, 오디오, 텍스트가 이 한도를 공유합니다.
-                    <br/>(이미지 100장은 충분히 가능합니다)
-                </li>
-                <li>
-                    <span className="text-red-400">비디오(Veo)</span>는 무료 티어에서 지원되지 않습니다. (유료 결제 필요)
+                    <span className="text-red-400">비디오(Veo)</span>는 무료 티어 미지원
                 </li>
             </ul>
           </div>
@@ -89,16 +111,15 @@ const QuotaMonitor: React.FC = () => {
           />
         </div>
 
-        {/* External Link to Real Dashboard */}
+        {/* External Link */}
         <div className="w-px h-4 bg-slate-800 mx-1"></div>
         <a 
             href="https://aistudio.google.com/app/plan_information" 
             target="_blank" 
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
-            title="구글 공식 대시보드에서 실제 사용량 확인"
+            title="구글 공식 대시보드"
         >
-            <span className="hidden sm:inline font-bold">실제 사용량 확인</span>
             <ExternalLink className="w-3 h-3" />
         </a>
       </div>
