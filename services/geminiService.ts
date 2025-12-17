@@ -1,0 +1,447 @@
+import { GoogleGenAI, Modality, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { ScriptData, Scene, LayoutType, TopicItem } from "../types";
+import { generateLayoutBase64 } from "../utils/layoutGenerator";
+import { quotaManager } from "../utils/quotaManager"; 
+
+// Initialize Gemini Client
+const apiKey = process.env.API_KEY || '';
+const ai = new GoogleGenAI({ apiKey });
+
+// --- SAFETY SETTINGS ---
+const SAFETY_SETTINGS = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+];
+
+// --- UTILITIES ---
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function createWavHeader(dataLength: number, sampleRate: number = 24000) {
+  const buffer = new ArrayBuffer(44);
+  const view = new DataView(buffer);
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true); 
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); 
+  view.setUint16(20, 1, true); 
+  view.setUint16(22, 1, true); 
+  view.setUint32(24, sampleRate, true); 
+  view.setUint32(28, sampleRate * 2, true); 
+  view.setUint16(32, 2, true); 
+  view.setUint16(34, 16, true); 
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true); 
+  return new Uint8Array(buffer);
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+function pcmToWavBase64(pcmBase64: string): string {
+    const pcmData = base64ToUint8Array(pcmBase64);
+    const header = createWavHeader(pcmData.length, 24000); 
+    const wavData = new Uint8Array(header.length + pcmData.length);
+    wavData.set(header);
+    wavData.set(pcmData, header.length);
+    return uint8ArrayToBase64(wavData);
+}
+
+// --- TYPE DEFINITIONS ---
+export interface FetchTopicsResult {
+  topics: TopicItem[];
+  error?: string;
+}
+
+// --- SYSTEM PROMPTS ---
+const ONE_SHOT_SYSTEM_INSTRUCTION = `
+You are the "Executive Producer AI". 
+Your goal is to output a COMPLETE YouTube Documentary Script Package in a SINGLE JSON response.
+Structure: Hook -> History -> Deep Analysis (3 angles) -> Counterarguments -> Future Prediction -> Conclusion.
+Writer: Detailed Korean narration. Minimum 5,000 characters.
+TTS PRE-PROCESSING: Create 'tts_text' (Hangul only).
+Director: 50~80 Scenes.
+Output JSON schema MUST be valid.
+`;
+
+const ADAPTATION_SYSTEM_INSTRUCTION = `
+You are the "Professional Video Editor AI".
+Convert raw text to JSON Script Package.
+Do NOT expand text. Split scenes intelligently.
+Output JSON schema MUST be valid.
+`;
+
+/**
+ * Helper: Check for API Error and Return Friendly Message
+ */
+function checkForApiError(error: any): string | undefined {
+    const msg = error.toString().toLowerCase();
+    
+    // 1. Daily Quota Exceeded (Explicit)
+    // Checks for "quota" AND ("exceeded" or "limit") to be sure.
+    if ((msg.includes("quota") && (msg.includes("exceeded") || msg.includes("limit"))) || msg.includes("429 resource exhausted")) {
+         return "⚠️ 일일 API 할당량을 초과했습니다 (Daily Quota). 내일 다시 이용해주세요.";
+    }
+
+    // 2. Rate Limit (RPM) - 429 without explicit "Quota" word usually means speed limit
+    if (msg.includes("429") || msg.includes("resource_exhausted")) {
+         return "요청 속도가 너무 빠릅니다 (RPM 제한). 10초 정도 쉬었다가 천천히 시도해주세요.";
+    }
+    
+    // 3. Service Overloaded
+    if (msg.includes("503") || msg.includes("overloaded")) {
+        return "구글 서버가 혼잡합니다. 잠시 후 다시 시도해주세요.";
+    }
+
+    return undefined;
+}
+
+function parseJSONSafely(text: string): any {
+  let cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+  const firstBrace = cleanText.indexOf('{');
+  const lastBrace = cleanText.lastIndexOf('}');
+  
+  if (firstBrace === -1 || lastBrace === -1) return null;
+  
+  cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+
+  try {
+    return JSON.parse(cleanText);
+  } catch (e) {
+    console.warn("JSON Parse Failed", e);
+    return null;
+  }
+}
+
+function enforceScenePacing(data: any): ScriptData {
+    const MAX_LENGTH = 60;
+    const newScenes: Scene[] = [];
+    let globalIndex = 1;
+
+    if (!data.scenes || !Array.isArray(data.scenes)) {
+        throw new Error("Invalid Scene Data generated by AI");
+    }
+
+    data.scenes.forEach((rawScene: any) => {
+        const narration = rawScene.scripts?.narration || rawScene.narration_full || "";
+        
+        if (narration.length <= MAX_LENGTH) {
+            newScenes.push(createSceneObject(rawScene, globalIndex++));
+            return;
+        }
+
+        const sentences = narration.match(/[^.?!]+[.?!]+[\s]*/g) || [narration];
+        
+        sentences.forEach((sentence: string) => {
+             if (!sentence.trim()) return;
+             const splitScene = {
+                 ...rawScene,
+                 scripts: {
+                     ...rawScene.scripts,
+                     narration: sentence.trim(),
+                     subtitles: rawScene.scripts?.subtitles || []
+                 }
+             };
+             newScenes.push(createSceneObject(splitScene, globalIndex++));
+        });
+    });
+
+    return { ...data, scenes: newScenes };
+}
+
+function createSceneObject(raw: any, index: number): Scene {
+    const type = raw.type === 'video' ? 'video' : 'image';
+    const baseId = raw.assets?.base_id || `scene_${String(index).padStart(3, '0')}`;
+    const duration = raw.duration_prediction 
+        ? parseFloat(raw.duration_prediction) 
+        : Math.max(3, Math.min(8, (raw.scripts?.narration?.length || 0) * 0.25));
+
+    return {
+        scene_index: index,
+        step_phase: raw.step_phase || "Chapter",
+        type: type,
+        duration_prediction: parseFloat(duration.toFixed(1)),
+        planned_layout: raw.layout || raw.planned_layout || 'SINGLE',
+        cuts: raw.cuts || [],
+        narration_full: raw.narration_full || raw.scripts?.narration || "",
+        assets: {
+            base_id: baseId,
+            audio_filename: raw.assets?.audio_filename || `${baseId}.mp3`,
+            visual_filename: raw.assets?.visual_filename || `${baseId}.png`,
+            subtitle_filename: raw.assets?.subtitle_filename || `${baseId}.ass`,
+            visual_url: raw.assets?.visual_url || "",
+            audio_url: raw.assets?.audio_url || ""
+        },
+        scripts: {
+            narration: raw.scripts?.narration || raw.narration_full || "",
+            tts_text: raw.scripts?.tts_text || raw.scripts?.narration || "",
+            subtitles: raw.scripts?.subtitles || [],
+            voice_tone: raw.scripts?.voice_tone || 'serious'
+        },
+        prompts: {
+            visual_prompt: raw.prompts?.visual_prompt || "Documentary visual",
+            motion_strength: raw.prompts?.motion_strength || (type === 'video' ? 5 : 0)
+        },
+        progress_status: {
+            is_script_done: true,
+            is_prompt_done: true, 
+            is_image_generated: raw.progress_status?.is_image_generated || false,
+            is_image_inspected: raw.progress_status?.is_image_inspected || false,
+            is_audio_generated: raw.progress_status?.is_audio_generated || false,
+            is_video_generated: raw.progress_status?.is_video_generated || false
+        }
+    };
+}
+
+export const generatePerfectScript = async (topic: string, onProgress: (msg: string) => void): Promise<ScriptData> => {
+    const model = 'gemini-2.5-flash';
+    try {
+        onProgress("AI 감독관들이 회의 중입니다... (약 30초 소요)");
+        quotaManager.increment(model);
+
+        const response = await ai.models.generateContent({
+            model,
+            contents: `TOPIC: ${topic}`,
+            config: {
+                responseMimeType: "application/json",
+                systemInstruction: ONE_SHOT_SYSTEM_INSTRUCTION,
+                safetySettings: SAFETY_SETTINGS
+            }
+        });
+        quotaManager.updateModelStatus('Idle');
+
+        const rawData = parseJSONSafely(response.text!);
+        if (!rawData) throw new Error("AI failed to generate valid JSON script.");
+
+        onProgress("대본 검수 및 컷 분할 중...");
+        const finalScript = enforceScenePacing(rawData);
+        return { ...finalScript, meta: { ...finalScript.meta, timestamp: Date.now() } };
+    } catch (error: any) {
+        quotaManager.updateModelStatus('Error'); 
+        const apiError = checkForApiError(error);
+        if (apiError) throw new Error(apiError);
+        throw error;
+    }
+};
+
+export const rewriteScript = async (currentData: ScriptData, mode: 'longer' | 'shorter', onProgress: (msg: string) => void): Promise<ScriptData> => {
+    const model = 'gemini-2.5-flash';
+    try {
+        onProgress(mode === 'longer' ? "내용을 확장하고 있습니다..." : "내용을 요약하고 있습니다...");
+        quotaManager.increment(model);
+
+        const systemPrompt = `You are a professional Script Editor. REWRITE JSON script. MODE: ${mode}. Keep JSON structure.`;
+
+        const response = await ai.models.generateContent({
+            model,
+            contents: `ORIGINAL JSON DATA: ${JSON.stringify(currentData)}`,
+            config: { responseMimeType: "application/json", systemInstruction: systemPrompt, safetySettings: SAFETY_SETTINGS }
+        });
+        quotaManager.updateModelStatus('Idle');
+
+        const rawData = parseJSONSafely(response.text!);
+        if (!rawData) throw new Error("Failed to rewrite script");
+
+        onProgress("대본 검수 및 컷 분할 중...");
+        return enforceScenePacing(rawData);
+    } catch (error: any) {
+        quotaManager.updateModelStatus('Error');
+        const apiError = checkForApiError(error);
+        if (apiError) throw new Error(apiError);
+        throw error;
+    }
+};
+
+export const fetchTrendingTopics = async (category: string): Promise<FetchTopicsResult> => {
+    const model = 'gemini-2.5-flash';
+    const timestamp = new Date().toISOString();
+    const combinedQuery = `Latest breaking news AND interesting mystery/shocking truths in ${category} (last 48h)`;
+    
+    try {
+        quotaManager.increment(model);
+        const searchRes = await ai.models.generateContent({
+            model, 
+            contents: `Context: ${timestamp}. Query: "${combinedQuery}". Find 6 diverse topics. Format: Title|Context|URL`,
+            config: { tools: [{ googleSearch: {} }] }
+        });
+        
+        await wait(6000);
+
+        let parseRes;
+        try {
+            quotaManager.increment(model);
+            parseRes = await ai.models.generateContent({
+                model, 
+                contents: `Analyze search results. Extract 6 topics (breaking/viral). Return JSON array: title, context, url, type. Text: ${searchRes.text || "No results"}`,
+                config: { responseMimeType: "application/json" }
+            });
+        } catch (err: any) {
+            const msg = err.toString().toLowerCase();
+            // Retry only if it's RPM, NOT quota
+            if (msg.includes('429') && !msg.includes('quota')) {
+                await wait(6000);
+                quotaManager.increment(model);
+                parseRes = await ai.models.generateContent({
+                    model,
+                    contents: `Analyze search results. Extract 6 topics. Return JSON array. Text: ${searchRes.text}`,
+                    config: { responseMimeType: "application/json" }
+                });
+            } else {
+                throw err;
+            }
+        }
+
+        quotaManager.updateModelStatus('Idle');
+        const items = JSON.parse(parseRes!.text!) as any[];
+        
+        const topics: TopicItem[] = items.map(i => ({
+            title: i.title, 
+            context: i.context, 
+            type: i.type === 'viral' ? 'viral' : 'breaking', 
+            url: (i.url && !i.url.includes('grounding') && !i.url.startsWith('/')) ? i.url : ""
+        }));
+
+        if (topics.length === 0) throw new Error("No topics parsed");
+        return { topics };
+
+    } catch (e) {
+        quotaManager.updateModelStatus('Error');
+        return { topics: [], error: checkForApiError(e) || "Failed to fetch topics" };
+    }
+};
+
+// [CRITICAL UPDATE] Now throws errors instead of returning empty strings
+export const generateImage = async (prompt: string, layout: LayoutType = 'SINGLE'): Promise<string> => {
+  const model = 'gemini-2.5-flash-image';
+  try {
+    quotaManager.increment(model);
+    const parts: any[] = [];
+    if (layout !== 'SINGLE') {
+        const layoutBase64 = generateLayoutBase64(layout);
+        const base64Data = layoutBase64.split(',')[1];
+        parts.push({ inlineData: { mimeType: 'image/png', data: base64Data } });
+        parts.push({ text: `Fill panels. Content: ${prompt}` });
+    } else {
+        parts.push({ text: `Prompt: ${prompt}` });
+    }
+
+    const response = await ai.models.generateContent({
+      model: model, contents: { parts: parts }, config: { safetySettings: SAFETY_SETTINGS }
+    });
+    
+    quotaManager.updateModelStatus('Idle');
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data 
+        ? `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}` 
+        : "";
+  } catch (error: any) { 
+    quotaManager.updateModelStatus('Error');
+    const apiError = checkForApiError(error);
+    if (apiError) throw new Error(apiError);
+    throw error;
+  }
+};
+
+// [CRITICAL UPDATE] Now throws errors instead of returning empty strings
+export const generateSpeech = async (text: string, tone: string): Promise<string> => {
+  const model = 'gemini-2.5-flash-preview-tts';
+  try {
+    quotaManager.increment(model);
+    const response = await ai.models.generateContent({
+      model: model, 
+      contents: { parts: [{ text: text }] },
+      config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } } },
+    });
+    quotaManager.updateModelStatus('Idle');
+    if (response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+        const pcmBase64 = response.candidates[0].content.parts[0].inlineData.data;
+        const wavBase64 = pcmToWavBase64(pcmBase64);
+        return `data:audio/wav;base64,${wavBase64}`;
+    }
+    return "";
+  } catch (error: any) { 
+    quotaManager.updateModelStatus('Error');
+    const apiError = checkForApiError(error);
+    if (apiError) throw new Error(apiError);
+    throw error;
+  }
+};
+
+// [CRITICAL UPDATE] Now throws errors instead of returning default
+export const inspectImage = async (base64Image: string): Promise<any> => {
+  const model = 'gemini-2.5-flash';
+  try {
+    quotaManager.increment(model);
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: 'image/png', data: base64Image.split(',')[1] } },
+          { text: `Analyze layout. Return JSON.` }
+        ]
+      },
+      config: { responseMimeType: "application/json" }
+    });
+    quotaManager.updateModelStatus('Idle');
+    return parseJSONSafely(response.text!);
+  } catch (error: any) { 
+    quotaManager.updateModelStatus('Error');
+    const apiError = checkForApiError(error);
+    if (apiError) throw new Error(apiError);
+    return { detected_layout: 'SINGLE', panel_count: 1 }; 
+  }
+};
+
+export const generateScriptFromRawText = async (rawText: string, onProgress: (msg: string) => void): Promise<ScriptData> => {
+    const model = 'gemini-2.5-flash';
+    try {
+        onProgress("원고를 분석하고 씬을 나누는 중입니다... (각색 모드)");
+        quotaManager.increment(model);
+        const response = await ai.models.generateContent({
+            model,
+            contents: `RAW SCRIPT: ${rawText}`,
+            config: { responseMimeType: "application/json", systemInstruction: ADAPTATION_SYSTEM_INSTRUCTION, safetySettings: SAFETY_SETTINGS }
+        });
+        quotaManager.updateModelStatus('Idle');
+        const rawData = parseJSONSafely(response.text!);
+        if (!rawData) throw new Error("AI failed to parse the script.");
+        onProgress("컷 최적화 및 데이터 정규화 중...");
+        const finalScript = enforceScenePacing(rawData);
+        return { ...finalScript, meta: { ...finalScript.meta, timestamp: Date.now() } };
+    } catch (error: any) {
+        quotaManager.updateModelStatus('Error');
+        const apiError = checkForApiError(error);
+        if (apiError) throw new Error(apiError);
+        throw error;
+    }
+};
+
+export const generateScriptDraft = generatePerfectScript; 
+export const applyDirectorMode = (data: ScriptData, s: string, p: string) => {
+    return { ...data, global_style: { ...data.global_style, art_style: s } };
+};
+export const generateVisualPlan = async (scenes: any[], style?: any) => scenes;
